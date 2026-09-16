@@ -100,13 +100,51 @@ async def scan_prescription(
                 medicine_name=None,
                 dosage=None,
                 frequency=None,
+                daily_frequency=1,
+                dosage_form="Tablet",
+                disease_category="General Healthcare",
+                initial_quantity=30,
+                quantity_per_dose=1,
+                instructions=None,
+                verified=False,
+                matched_medicine=None,
+                generic_salt=None,
                 raw_text="",
                 confidence_score=0.0,
                 scan_id=None,
+                medicines=None,
             )
 
-        # --- NLP Parsing ---
-        parsed = parse_prescription_text(raw_text)
+        # --- Structured Parsing / NLP ---
+        # Check if OCR engine returned pre-parsed medicines (e.g. from Gemini Vision)
+        medicines_list = ocr_result.get("medicines", None)
+        parsed_data = ocr_result.get("parsed_data")
+        verified_match = ocr_result.get("verified", False)
+        matched_med = ocr_result.get("matched_medicine")
+        generic_salt = ocr_result.get("generic_salt")
+
+        if medicines_list and parsed_data:
+            # Use AI Vision pre-parsed data as primary source
+            parsed = {
+                "medicine_name": parsed_data.get("medicine_name") or matched_med,
+                "dosage": parsed_data.get("dosage"),
+                "frequency": parsed_data.get("frequency"),
+                "daily_frequency": parsed_data.get("daily_frequency", 1),
+                "dosage_form": parsed_data.get("dosage_form", "Tablet"),
+                "disease_category": parsed_data.get("disease_category", "General Healthcare"),
+                "initial_quantity": parsed_data.get("initial_quantity", 30),
+                "quantity_per_dose": parsed_data.get("quantity_per_dose", 1),
+                "instructions": parsed_data.get("instructions"),
+            }
+            generic_salt = parsed_data.get("generic_salt") or generic_salt
+            matched_med = matched_med or parsed.get("medicine_name")
+            verified_match = True
+        else:
+            # Fallback: NLP parsing on raw OCR text
+            parsed = parse_prescription_text(raw_text)
+            medicines_list = None
+
+        final_medicine_name = parsed.get("medicine_name") or matched_med
 
         # --- Save Result to MongoDB ---
         scan_id = None
@@ -116,18 +154,35 @@ async def scan_prescription(
                 filename=file.filename or "prescription.jpg",
                 raw_text=raw_text,
                 confidence_score=confidence_score,
-                parsed_data=parsed,
+                parsed_data={
+                    **parsed,
+                    "medicine_name": final_medicine_name,
+                    "matched_medicine": matched_med,
+                    "generic_salt": generic_salt,
+                    "verified": verified_match,
+                    "medicines": medicines_list,
+                },
             )
         except Exception as db_err:
             print(f"[OCR Router] Failed to save result to MongoDB: {db_err}")
 
         return OCRScanResponse(
-            medicine_name=parsed.get("medicine_name"),
+            medicine_name=final_medicine_name,
             dosage=parsed.get("dosage"),
             frequency=parsed.get("frequency"),
+            daily_frequency=parsed.get("daily_frequency", 1),
+            dosage_form=parsed.get("dosage_form", "Tablet"),
+            disease_category=parsed.get("disease_category", "General Healthcare"),
+            initial_quantity=parsed.get("initial_quantity", 30),
+            quantity_per_dose=parsed.get("quantity_per_dose", 1),
+            instructions=parsed.get("instructions"),
+            verified=verified_match,
+            matched_medicine=matched_med,
+            generic_salt=generic_salt,
             raw_text=raw_text,
             confidence_score=confidence_score,
             scan_id=scan_id,
+            medicines=medicines_list,
         )
     finally:
         await file.close()

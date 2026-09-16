@@ -32,3 +32,15 @@ async def setup_database():
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest.fixture(autouse=True)
+def mock_otp_verification(monkeypatch):
+    """Ensure integration tests are not blocked by unverified email checks."""
+    from app.services.otp_service import OTPService
+
+    async def _mock_is_verified(destination: str, channel: str = "email") -> bool:
+        return True
+
+    monkeypatch.setattr(OTPService, "is_destination_verified", _mock_is_verified)
+
